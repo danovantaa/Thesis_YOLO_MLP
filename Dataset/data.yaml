@@ -1,0 +1,10 @@
+names:
+  0: arm
+  1: head
+  2: upper_body
+
+path: .
+
+train: images/train
+val: images/valid
+test: images/test
