@@ -1,9 +1,9 @@
 import torch 
 import torch.nn as nn
-import math 
+import math
 from ultralytics import YOLO
 
-# YOLO Version 12
+
 def autopad(k, p=None, d=1):
     if d > 1:
         k = d * (k - 1) + 1
@@ -65,7 +65,9 @@ class Attention12(nn.Module):
         super().__init__()
 
         self.qkv = Conv(c, c * 3, 1, act=False)
+
         self.proj = Conv(c, c, 1, act=False)
+        #self.pe = nn.Conv2d(c,c,7,1,3,groups=c)
         self.pe = ConvPE(c, c, 7, 1, g=c, act=False)
 
     def forward(self, x):
@@ -77,7 +79,9 @@ class Attention12(nn.Module):
         attn = attn.softmax(-1)
 
         x = attn @ v
+
         x = self.proj(x)
+
         x = x + self.pe(v)
 
         return x
@@ -217,7 +221,6 @@ class C3K2_Neck(nn.Module):
 
         return self.cv2(torch.cat(y, 1))
 
-
 class Concat(nn.Module):
     def __init__(self, dim=1):
         super().__init__()
@@ -225,13 +228,13 @@ class Concat(nn.Module):
 
     def forward(self, x):
         return torch.cat(x, self.d)
-
+    
 class YOLOv12Backbone(nn.Module):
 
     def __init__(self):
         super().__init__()
 
-        base_c = [96, 192, 384, 768, 768]
+        base_c = [64, 128, 256, 512, 512]
         c1, c2, c3, c4, c5 = base_c
 
         # layer 0
@@ -281,7 +284,7 @@ class YOLOv12Backbone(nn.Module):
         return p3, p4, p5
     
 class YOLOv12Neck(nn.Module):
-    def __init__(self, ch=(768, 768, 768)):
+    def __init__(self, ch=(512, 512, 512)):
         super().__init__()
 
         p3_ch, p4_ch, p5_ch = ch
@@ -301,18 +304,18 @@ class YOLOv12Neck(nn.Module):
         # concat: fpn1 upsample + p3 = 768 + 768 = 1536
         self.fpn2 = A2C2f(
             p4_ch + p3_ch,   # 1536
-            384,             # output layer 14
+            256,             # output layer 14
             n=2,
             block_type="c3k"
         )
 
         # layer 15
-        self.down1 = Conv(384, 384, 3, 2)
+        self.down1 = Conv(256, 256, 3, 2)
 
         # layer 17
-        # concat: down1 + fpn1 = 384 + 768 = 1152
+        # concat: down1 + fpn1 = 256 + 768 = 1152
         self.pan1 = A2C2f(
-            384 + p4_ch,     # 1152
+            256 + p4_ch,     # 1152
             p4_ch,           # 768
             n=2,
             block_type="c3k"
@@ -329,7 +332,7 @@ class YOLOv12Neck(nn.Module):
             n=2
         )
 
-        self.out_channels = (384, 768, 768)
+        self.out_channels = (256, 512, 512)
 
     def forward(self, p3, p4, p5):
         # layer 9-11
@@ -354,6 +357,61 @@ class YOLOv12Neck(nn.Module):
 
         return n3, n4, n5
 
+# class Detect(nn.Module):
+#     def __init__(self, ch, nc=80, reg_max=16):
+#         super().__init__()
+
+#         self.nc = nc
+#         self.reg_max = reg_max
+#         self.no = nc + 4 * reg_max
+
+#         self.cv2 = nn.ModuleList()  
+#         self.cv3 = nn.ModuleList()  
+
+#         for i, c in enumerate(ch):
+#             c2 = min(c, 96)
+
+#             self.cv2.append(
+#                 nn.Sequential(
+#                     Conv(c, c2, 3),
+#                     Conv(c2, c2, 3),
+#                     nn.Conv2d(c2, 4 * reg_max, 1)
+#                 )
+#             )
+
+#             if i == 0:
+#                 c_mid = c
+#             else:
+#                 c_mid = c // 2
+
+#             self.cv3.append(
+#                 nn.Sequential(
+#                     nn.Sequential(
+#                         DWConv(c, c, 3),
+#                         Conv(c, c_mid, 1, act=False)
+#                     ),
+#                     nn.Sequential(
+#                         DWConv(c_mid, c_mid, 3),
+#                         Conv(c_mid, c_mid, 1, act=False)
+#                     ),
+#                     nn.Conv2d(c_mid, nc, 1)
+#                 )
+#             )
+
+#         self.dfl = DFL(reg_max)
+
+#     def forward(self, feats):
+#         outputs = []
+
+#         for i, x in enumerate(feats):
+#             reg = self.cv2[i](x)
+#             cls = self.cv3[i](x)
+
+#             out = torch.cat([reg, cls], 1)
+#             outputs.append(out)
+
+#         return outputs
+
 class Detect(nn.Module):
     def __init__(self, ch, nc=80, reg_max=16):
         super().__init__()
@@ -362,12 +420,13 @@ class Detect(nn.Module):
         self.reg_max = reg_max
         self.no = nc + 4 * reg_max
 
-        self.cv2 = nn.ModuleList()  
-        self.cv3 = nn.ModuleList()  
+        self.cv2 = nn.ModuleList()
+        self.cv3 = nn.ModuleList()
 
-        for i, c in enumerate(ch):
-            c2 = min(c, 96)
+        c2 = max(16, ch[0] // 4, reg_max * 4)
+        c3 = max(ch[0], min(nc, 100))
 
+        for c in ch:
             self.cv2.append(
                 nn.Sequential(
                     Conv(c, c2, 3),
@@ -376,22 +435,17 @@ class Detect(nn.Module):
                 )
             )
 
-            if i == 0:
-                c_mid = c
-            else:
-                c_mid = c // 2
-
             self.cv3.append(
                 nn.Sequential(
                     nn.Sequential(
                         DWConv(c, c, 3),
-                        Conv(c, c_mid, 1, act=False)
+                        Conv(c, c3, 1, act=False)
                     ),
                     nn.Sequential(
-                        DWConv(c_mid, c_mid, 3),
-                        Conv(c_mid, c_mid, 1, act=False)
+                        DWConv(c3, c3, 3),
+                        Conv(c3, c3, 1, act=False)
                     ),
-                    nn.Conv2d(c_mid, nc, 1)
+                    nn.Conv2d(c3, nc, 1)
                 )
             )
 
@@ -412,153 +466,95 @@ class Detect(nn.Module):
 class YOLOv12(nn.Module):
     def __init__(self, nc=80):
         super().__init__()
+        
+        self.num_classes = nc
+        self.nc = nc
 
         self.backbone = YOLOv12Backbone()
         self.neck = YOLOv12Neck(self.backbone.out_channels)
-        self.head = Detect(self.neck.out_channels,nc)
-
+        self.head = Detect(self.neck.out_channels, nc)
+        
     def forward(self, x):
+        
         p3, p4, p5 = self.backbone(x)
         p3, p4, p5 = self.neck(p3, p4, p5)
 
-        return self.head([p3, p4, p5])
+        outputs = self.head([p3, p4, p5])
 
-my_model = YOLOv12(nc=80)
-
-u = YOLO("yolo12x.pt").model  
-
-# class DetectionModel(nn.Module):
-
-#     def __init__(self, nc=80):
-#         super().__init__()
-
-#         self.model = nn.Sequential(
-
-#             Conv(3,96,3,2),
-            
-#             Conv(96,192,3,2),
-#             C3K2V12(192,384,n=2),
-            
-#             Conv(384,384,3,2),
-#             C3K2V12(384,768,n=2),
-            
-#             Conv(768,768,3,2),
-#             A2C2f(768,768,n=4),
-            
-#             Conv(768,768,3,2),
-#             A2C2f(768,768,n=4),
-            
-#             nn.Upsample(scale_factor=2.0, mode="nearest"),
-            
-#             Concat(),
-#             A2C2f(1536, 768, n=2, block_type="c3k"),
-
-#             nn.Upsample(scale_factor=2.0, mode="nearest"),
-            
-#             Concat(),
-#             A2C2f(1536, 384, n=2, block_type="c3k"),
-#             Conv(384, 384, 3, 2),
-
-#             Concat(),
-#             A2C2f(1152, 768, n=2, block_type="c3k"),
-#             Conv(768, 768, 3, 2),
-
-#             Concat(),
-#             C3K2_Neck(1536, 768, n=2),
-#             Detect((384, 768, 768), nc=nc)
-#         )
+        return outputs
     
-my_model = YOLOv12(nc=80)
+model = YOLOv12(nc=80)
 
-u = YOLO("yolo12x.pt").model  
+u = YOLO(r"yolo12l.pt")
 
-for i, m in enumerate(u.model):
-    print(i, type(m).__name__)
+official_model = u.model
+my_params = sum(p.numel() for p in model.parameters())
+official_params = sum(p.numel() for p in official_model.parameters())
 
-backbone_idx = range(0, 9)
-neck_idx = range(9, 21)
-head_idx = range(21, 22)
+print("My Params:", my_params)
+print("Official Params:", official_params)
 
-def count_params(module):
-    return sum(p.numel() for p in module.parameters())
+x = torch.randn(1, 3, 640, 640)
 
-backbone_params = sum(count_params(u.model[i]) for i in backbone_idx)
-neck_params = sum(count_params(u.model[i]) for i in neck_idx)
-head_params = sum(count_params(u.model[i]) for i in head_idx)
-total_params = (backbone_params + neck_params + head_params)
+official_model.eval()
 
-print("ULTRALYTICS")
-print(f"Backbone : {backbone_params:,}")
-print(f"Neck     : {neck_params:,}")
-print(f"Head     : {head_params:,}")
-print(f"Total    : {total_params:,}")
-
-backbone = YOLOv12Backbone()
-neck = YOLOv12Neck(backbone.out_channels)
-head = Detect(neck.out_channels, nc=80)
-
-print("ARSITEKTUR SAYA ")
-
-backbone_params = sum(p.numel() for p in backbone.parameters())
-neck_params = sum(p.numel() for p in neck.parameters())
-head_params = sum(p.numel() for p in head.parameters())
-total = (backbone_params + neck_params + head_params)
-
-print(f"Backbone : {backbone_params:,}")
-print(f"Neck     : {neck_params:,}")
-print(f"Head     : {head_params:,}")
-print(f"Total    : {total:,}")
-   
-my_layers = [
-    my_model.backbone.stem,        # 0
-
-    my_model.backbone.dark2[0],    # 1
-    my_model.backbone.dark2[1],    # 2
-
-    my_model.backbone.dark3[0],    # 3
-    my_model.backbone.dark3[1],    # 4
-
-    my_model.backbone.dark4[0],    # 5
-    my_model.backbone.dark4[1],    # 6
-
-    my_model.backbone.dark5[0],    # 7
-    my_model.backbone.dark5[1],    # 8
-
-    my_model.neck.up,              # 9
-    None,                          # 10 Concat
-    my_model.neck.fpn1,            # 11
-
-    my_model.neck.up,              # 12
-    None,                          # 13 Concat
-    my_model.neck.fpn2,            # 14
-
-    my_model.neck.down1,           # 15
-    None,                          # 16 Concat
-    my_model.neck.pan1,            # 17
-
-    my_model.neck.down2,           # 18
-    None,                          # 19 Concat
-    my_model.neck.pan2,            # 20
-
-    my_model.head                  # 21 Detect
-]
-
-for i, my_layer in enumerate(my_layers):
-    if my_layer is None:
-        print(f"Layer {i}: skip")
-        continue
-
-    my_layer.load_state_dict(
-        u.model[i].state_dict(),
-        strict=True
-    )
-
-    print(f"Layer {i}: OK")
+with torch.no_grad():
+    y = official_model(x)
     
-my_model.train()
+model.eval()
 
-optimizer = torch.optim.AdamW(
-    my_model.parameters(),
-    lr=1e-4,
-    weight_decay=1e-4
-)
+with torch.no_grad():
+    y2 = model(x)
+    
+print("Official")
+
+for i, out in enumerate(y):
+
+    if torch.is_tensor(out):
+        print(i, out.shape)
+
+    elif isinstance(out, dict):
+        print(i, "DICT")
+
+        for k, v in out.items():
+
+            if torch.is_tensor(v):
+                print("   ", k, v.shape)
+
+            else:
+                print("   ", k, type(v))
+
+    else:
+        print(i, type(out))
+
+
+print("\nModel Saya")
+
+for i, out in enumerate(y2):
+
+    if torch.is_tensor(out):
+        print(i, out.shape)
+
+    elif isinstance(out, dict):
+        print(i, "DICT")
+
+        for k, v in out.items():
+
+            if torch.is_tensor(v):
+                print("   ", k, v.shape)
+
+            else:
+                print("   ", k, type(v))
+
+    else:
+        print(i, type(out))
+
+
+x = torch.randn(1, 3, 640, 640)
+
+with torch.no_grad():
+    p3, p4, p5 = model.backbone(x)
+    n3, n4, n5 = model.neck(p3, p4, p5)
+
+print(p3.shape, p4.shape, p5.shape)
+print(n3.shape, n4.shape, n5.shape)

@@ -341,7 +341,71 @@ class YOLOv11(nn.Module):
 
         return outputs
 
-u = YOLO(r"yolo11x.pt")
+model = YOLOv11("l", nc=80)
+
+u = YOLO(r"yolo11l.pt")
+
+official_model = u.model
+my_params = sum(p.numel() for p in model.parameters())
+official_params = sum(p.numel() for p in official_model.parameters())
+
+print("My Params:", my_params)
+print("Official Params:", official_params)
+
+x = torch.randn(1, 3, 640, 640)
+
+official_model.eval()
+
+with torch.no_grad():
+    y = official_model(x)
+    
+model.eval()
+
+with torch.no_grad():
+    y2 = model(x)
+    
+print("Official")
+
+for i, out in enumerate(y):
+
+    if torch.is_tensor(out):
+        print(i, out.shape)
+
+    elif isinstance(out, dict):
+        print(i, "DICT")
+
+        for k, v in out.items():
+
+            if torch.is_tensor(v):
+                print("   ", k, v.shape)
+
+            else:
+                print("   ", k, type(v))
+
+    else:
+        print(i, type(out))
+
+
+print("\nModel Saya")
+
+for i, out in enumerate(y2):
+
+    if torch.is_tensor(out):
+        print(i, out.shape)
+
+    elif isinstance(out, dict):
+        print(i, "DICT")
+
+        for k, v in out.items():
+
+            if torch.is_tensor(v):
+                print("   ", k, v.shape)
+
+            else:
+                print("   ", k, type(v))
+
+    else:
+        print(i, type(out))
 
 
     

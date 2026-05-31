@@ -98,7 +98,7 @@ class Concat(nn.Module):
         return torch.cat(x, self.d)
 
 class YOLOv8Backbone(nn.Module):
-    def __init__(self, scale="x"):
+    def __init__(self, scale="l"):
         super().__init__()
 
         depth_mul, width_mul = SCALES[scale]
@@ -158,7 +158,7 @@ class YOLOv8Backbone(nn.Module):
         return p3, p4, p5
     
 class YOLOv8Neck(nn.Module):
-    def __init__(self, ch, scale="x"):
+    def __init__(self, ch, scale="l"):
         super().__init__()
 
         depth_mul, _ = SCALES[scale]
@@ -256,7 +256,7 @@ class YOLOv8Head(nn.Module):
         return outputs
     
 class YOLOv8(nn.Module):
-    def __init__(self, scale="x",nc=80):
+    def __init__(self, scale="l",nc=80):
         super().__init__()
         
         self.backbone = YOLOv8Backbone(scale)
@@ -271,9 +271,9 @@ class YOLOv8(nn.Module):
         return self.head([p3, p4, p5])
 
     
-model = YOLOv8("x", nc=80)
+model = YOLOv8("l", nc=80)
 
-u = YOLO(r"yolov8x.pt")
+u = YOLO(r"yolov8l.pt")
 
 official_model = u.model
 my_params = sum(p.numel() for p in model.parameters())
